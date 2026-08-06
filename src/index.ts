@@ -1,88 +1,112 @@
+import "dotenv/config";
 import express from "express";
 import z from "zod";
-// import argon2 from "argon2";
+import argon2 from "argon2";
+import jwt from "jsonwebtoken";
+import { PrismaClient } from "./generated/prisma/client";
+import { PrismaPg } from "@prisma/adapter-pg";
+
+const client = new PrismaClient({
+  adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
+});
+
+const JWT_SECRET = process.env.SECRET;
+if (!JWT_SECRET) {
+  throw new Error("secret env not set");
+}
 
 const app = express();
 app.use(express.json());
 
-type User = {
-  id: number;
-  name: string;
-  email: string;
-  password: string;
-  // phone: number;
-};
-
-const users: User[] = [];
-
-app.post("/signup", (req, res) => {
-  const userBody = z.object({
-    name: z.string().min(6).max(30),
+app.post("/signup", async (req, res) => {
+  const requiredBody = z.object({
+    name: z.string(),
     email: z.email(),
-    password: z.string().min(6),
-    // phone: z.number(),
+    password: z
+      .string()
+      .min(6)
+      .max(24)
+      .regex(/[A-Z]/, "password must contain a upper case letter")
+      .regex(/[a-z]/, "password must contain a lower case letter")
+      .regex(/[!@#$%^&*()<>?:]/, "password must contain a special letter"),
   });
 
-  const parsed = userBody.safeParse(req.body);
-  if (!parsed.success) {
+  const parsedBody = requiredBody.safeParse(req.body);
+  if (!parsedBody.success) {
     return res.status(400).json({
-      error: z.prettifyError(parsed.error),
+      error: parsedBody.error.issues.map((e) => e.message),
     });
   }
 
-  const { email } = req.body;
+  const { name, email, password } = req.body;
 
-  const userEmail = users.find((u) => u.email === email);
-  if (userEmail) {
+  const existingUser = await client.user.findFirst({
+    where: {
+      email,
+    },
+  });
+
+  if (existingUser) {
     return res.status(401).json({
-      error: "user already exists",
+      error: "user already exists!",
     });
   }
 
-  const newUser: User = {
-    id: users.length + 1,
-    ...parsed.data,
-  };
+  const securePassword = await argon2.hash(password);
 
-  users.push(newUser);
-  res.status(201).json({
-    newUser,
+  await client.user.create({
+    data: {
+      name,
+      email,
+      password: securePassword,
+    },
+  });
+  return res.status(201).json({
+    message: "user created successfully",
   });
 });
 
-app.post("/signin", (req, res) => {
-  const body = z.object({
-    email: z.string(),
-    password: z.string().min(6),
+app.post("/signin", async (req, res) => {
+  const requiredBody = z.object({
+    email: z.email(),
+    password: z.string().min(6).max(24),
   });
 
-  const parsedBody = body.safeParse(req.body);
+  const parsedBody = requiredBody.safeParse(req.body);
   if (!parsedBody.success) {
     return res.status(400).json({
-      error: z.prettifyError(parsedBody.error),
+      error: parsedBody.error.issues.map((e) => e.message),
     });
   }
 
-  const { email, password } = req.body;
+  const { email, password } = parsedBody.data;
+  const existingUser = await client.user.findFirst({
+    where: {
+      email,
+    },
+  });
 
-  const user = users.find((u) => u.email === email);
-  if (!user) {
+  if (!existingUser) {
     return res.status(404).json({
       error: "user not found",
     });
   }
-  if (user.password !== password) {
+
+  const isValidPassword = await argon2.verify(existingUser.password, password);
+  if (!isValidPassword) {
     return res.status(401).json({
       error: "invalid password",
     });
   }
 
-  res.status(200).json({
+  const token = jwt.sign({ email }, JWT_SECRET, { expiresIn: "1d" });
+
+  return res.status(200).json({
     message: "signed in successfully",
-    user,
+    token,
   });
 });
 
 app.listen(3000, () => {
-  console.log("server running on port 3000");
+  console.log("server running!");
 });
