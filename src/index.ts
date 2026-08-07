@@ -48,7 +48,7 @@ app.post("/signup", async (req, res) => {
 
   if (existingUser) {
     return res.status(401).json({
-      error: "user already exists!",
+      error: "user already exists, please signin",
     });
   }
 
@@ -88,7 +88,7 @@ app.post("/signin", async (req, res) => {
 
   if (!existingUser) {
     return res.status(404).json({
-      error: "user not found",
+      error: "user not found, please signup",
     });
   }
 
@@ -99,12 +99,57 @@ app.post("/signin", async (req, res) => {
     });
   }
 
+  if (existingUser.currentToken) {
+    try {
+      jwt.verify(existingUser.currentToken, JWT_SECRET);
+      return res.status(409).json({
+        error: "user already signed in",
+      });
+    } catch {}
+  }
+
   const token = jwt.sign({ email }, JWT_SECRET, { expiresIn: "1d" });
+
+  await client.user.update({
+    where: {
+      id: existingUser.id,
+    },
+    data: {
+      currentToken: token,
+    },
+  });
 
   return res.status(200).json({
     message: "signed in successfully",
     token,
   });
+});
+
+app.post("/signout", async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    return res.status(401).json({ error: "no token provided" });
+  }
+
+  const token = authHeader.replace("Bearer ", "");
+
+  let decoded: { email: string };
+  try {
+    decoded = jwt.verify(token, JWT_SECRET) as { email: string };
+  } catch {
+    return res.status(401).json({ error: "invalid or expired token" });
+  }
+
+  await client.user.update({
+    where: {
+      email: decoded.email,
+    },
+    data: {
+      currentToken: null,
+    },
+  });
+
+  return res.status(200).json({ message: "signed out successfully" });
 });
 
 app.listen(3000, () => {
