@@ -5,6 +5,8 @@ import argon2 from "argon2";
 import jwt from "jsonwebtoken";
 import { PrismaClient } from "./generated/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
+import authenticate, { AuthRequest } from "./middleware/auth";
+import { safeDecode } from "zod/v4/core";
 
 const client = new PrismaClient({
   adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
@@ -38,7 +40,7 @@ app.post("/signup", async (req, res) => {
     });
   }
 
-  const { name, email, password } = req.body;
+  const { name, email, password } = parsedBody.data;
 
   const existingUser = await client.user.findFirst({
     where: {
@@ -108,7 +110,9 @@ app.post("/signin", async (req, res) => {
     } catch {}
   }
 
-  const token = jwt.sign({ email }, JWT_SECRET, { expiresIn: "1d" });
+  const token = jwt.sign({ id: existingUser.id, email }, JWT_SECRET, {
+    expiresIn: "1d",
+  });
 
   await client.user.update({
     where: {
@@ -125,24 +129,10 @@ app.post("/signin", async (req, res) => {
   });
 });
 
-app.post("/signout", async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) {
-    return res.status(401).json({ error: "no token provided" });
-  }
-
-  const token = authHeader.replace("Bearer ", "");
-
-  let decoded: { email: string };
-  try {
-    decoded = jwt.verify(token, JWT_SECRET) as { email: string };
-  } catch {
-    return res.status(401).json({ error: "invalid or expired token" });
-  }
-
+app.post("/signout", authenticate, async (req: AuthRequest, res) => {
   await client.user.update({
     where: {
-      email: decoded.email,
+      id: req.userId!,
     },
     data: {
       currentToken: null,
@@ -150,6 +140,32 @@ app.post("/signout", async (req, res) => {
   });
 
   return res.status(200).json({ message: "signed out successfully" });
+});
+
+app.post("/user/income", authenticate, async (req: AuthRequest, res) => {
+  const userId = req.userId!;
+
+  const requiredBody = z.object({
+    salary: z.number(),
+    businessIncome: z.number(),
+    otherIncome: z.number(),
+  });
+
+  const parsedBody = requiredBody.safeParse(req.body);
+  if (!parsedBody.success) {
+    return res.status(400).json({
+      error: parsedBody.error.issues.map((e) => e.message),
+    });
+  }
+
+  const incomeRecord = await client.incomeRecord.create({
+    data: {
+      ...parsedBody.data,
+      userId,
+    },
+  });
+
+  return res.status(200).json({ message: "record updated", incomeRecord });
 });
 
 app.listen(3000, () => {

@@ -24,7 +24,7 @@ model User {
 
 model IncomeRecord {
   id             Int      @id @default(autoincrement())
-  salary         Int
+  income         Int
   businessIncome Int
   otherIncome    Int
   userId         Int
