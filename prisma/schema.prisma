@@ -13,13 +13,12 @@ datasource db {
 }
 
 model User {
-  id           Int            @id @default(autoincrement())
-  name         String
-  email        String         @unique
-  password     String
-  currentToken String?
-  salary       IncomeRecord[]
-  taxDetails   TaxReturn[]
+  id         Int            @id @default(autoincrement())
+  name       String
+  email      String         @unique
+  password   String
+  salary     IncomeRecord[]
+  taxDetails TaxReturn[]
 }
 
 model IncomeRecord {
@@ -27,7 +26,7 @@ model IncomeRecord {
   income         Int
   businessIncome Int
   otherIncome    Int
-  userId         Int
+  userId         Int      @unique
   user           User     @relation(fields: [userId], references: [id])
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt

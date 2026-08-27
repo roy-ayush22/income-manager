@@ -6,7 +6,6 @@ import jwt from "jsonwebtoken";
 import { PrismaClient } from "./generated/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import authenticate, { AuthRequest } from "./middleware/auth";
-import { safeDecode } from "zod/v4/core";
 
 const client = new PrismaClient({
   adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
@@ -101,26 +100,8 @@ app.post("/signin", async (req, res) => {
     });
   }
 
-  if (existingUser.currentToken) {
-    try {
-      jwt.verify(existingUser.currentToken, JWT_SECRET);
-      return res.status(409).json({
-        error: "user already signed in",
-      });
-    } catch {}
-  }
-
   const token = jwt.sign({ id: existingUser.id, email }, JWT_SECRET, {
     expiresIn: "1d",
-  });
-
-  await client.user.update({
-    where: {
-      id: existingUser.id,
-    },
-    data: {
-      currentToken: token,
-    },
   });
 
   return res.status(200).json({
@@ -129,16 +110,7 @@ app.post("/signin", async (req, res) => {
   });
 });
 
-app.post("/signout", authenticate, async (req: AuthRequest, res) => {
-  await client.user.update({
-    where: {
-      id: req.userId!,
-    },
-    data: {
-      currentToken: null,
-    },
-  });
-
+app.post("/signout", authenticate, async (_req: AuthRequest, res) => {
   return res.status(200).json({ message: "signed out successfully" });
 });
 
@@ -158,10 +130,20 @@ app.post("/user/income", authenticate, async (req: AuthRequest, res) => {
     });
   }
 
-  const incomeRecord = await client.incomeRecord.create({
-    data: {
-      ...parsedBody.data,
+  const { salary, businessIncome, otherIncome } = parsedBody.data;
+
+  const incomeRecord = await client.incomeRecord.upsert({
+    where: { userId },
+    create: {
+      income: salary,
+      businessIncome,
+      otherIncome,
       userId,
+    },
+    update: {
+      income: salary,
+      businessIncome,
+      otherIncome,
     },
   });
 
