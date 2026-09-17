@@ -1,5 +1,6 @@
 import { useState } from "react";
 import "./App.css";
+import { GoogleIcon } from "../components/GoogleIcon";
 
 function AuthButton({ children, className, ...props }) {
   return (
@@ -68,7 +69,10 @@ export default function App() {
               )
             }
           >
-            <span className="google-glyph">G</span> Continue with Google
+            <span className="google-glyph">
+              <GoogleIcon width={20} height={20}/>
+            </span>{" "}
+            Continue with Google
           </AuthButton>
 
           <div className="divider">

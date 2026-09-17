@@ -1,23 +1,53 @@
 import "dotenv/config";
 import express from "express";
+import session from "express-session";
+import connectPgSimple from "connect-pg-simple";
+import { Pool } from "pg";
 import z from "zod";
 import argon2 from "argon2";
-import jwt from "jsonwebtoken";
 import { PrismaClient } from "./generated/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import authenticate, { AuthRequest } from "./middleware/auth";
+
+declare module "express-session" {
+  interface SessionData {
+    userId: number;
+  }
+}
 
 const client = new PrismaClient({
   adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
 });
 
-const JWT_SECRET = process.env.SECRET;
-if (!JWT_SECRET) {
-  throw new Error("secret env not set");
+const SESSION_SECRET = process.env.SESSION_SECRET;
+if (!SESSION_SECRET) {
+  throw new Error("session secret not set env");
 }
+
+const pgPool = new Pool({ connectionString: process.env.DATABASE_URL });
+const PgSession = connectPgSimple(session);
 
 const app = express();
 app.use(express.json());
+
+app.use(
+  session({
+    store: new PgSession({
+      pool: pgPool,
+      tableName: "session",
+      createTableIfMissing: true,
+    }),
+    secret: SESSION_SECRET,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 1000 * 60 * 60 * 24,
+    },
+  }),
+);
 
 app.post("/signup", async (req, res) => {
   const requiredBody = z.object({
@@ -100,17 +130,26 @@ app.post("/signin", async (req, res) => {
     });
   }
 
-  const token = jwt.sign({ id: existingUser.id, email }, JWT_SECRET, {
-    expiresIn: "1d",
-  });
+  req.session.userId = existingUser.id;
 
   return res.status(200).json({
     message: "signed in successfully",
-    token,
   });
 });
 
-app.post("/signout", authenticate, async (_req: AuthRequest, res) => {
+app.post("/signout", authenticate, async (req: AuthRequest, res) => {
+  req.session.destroy((err) => {
+    if (err) {
+      return res.status(500).json({
+        error: "could not sign out",
+      });
+    }
+    res.clearCookie("cookie.sid");
+    return res.status(200).json({
+      message: "signout out successfully",
+    });
+  });
+
   return res.status(200).json({ message: "signed out successfully" });
 });
 
