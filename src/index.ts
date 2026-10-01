@@ -15,6 +15,16 @@ declare module "express-session" {
   }
 }
 
+interface TaxCalculationResult {
+  grossIncome: number;
+  standardDeduction: number;
+  netTaxableIncome: number;
+  grossTax: number;
+  rebate87A: number;
+  taxAfterRebate: number;
+  finalTaxPayable: number;
+}
+
 const client = new PrismaClient({
   adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
 });
@@ -187,6 +197,100 @@ app.post("/user/income", authenticate, async (req: AuthRequest, res) => {
   });
 
   return res.status(200).json({ message: "record updated", incomeRecord });
+});
+
+app.get("/user/income", authenticate, async (req: AuthRequest, res) => {
+  const userId = req.userId!;
+
+  const record = await client.incomeRecord.findUnique({
+    where: { userId },
+  });
+  if (!record) {
+    return res.status(404).json({
+      error: "no income found, add income record first",
+    });
+  }
+
+  const totalIncome =
+    record.income + record.businessIncome + record.otherIncome;
+
+  res.status(200).json({
+    income: record.income,
+    businessIncome: record.businessIncome,
+    otherIncome: record.otherIncome,
+    totalIncome,
+  });
+});
+
+app.get("/user/tax", authenticate, async (req: AuthRequest, res) => {
+  const userId = req.userId!;
+
+  const incomeRecord = await client.incomeRecord.findUnique({
+    where: { userId },
+  });
+  if (!incomeRecord) {
+    return res.status(404).json({
+      error: "no income record, please add income details first",
+    });
+  }
+
+  const grossIncome =
+    incomeRecord.otherIncome +
+    incomeRecord.businessIncome +
+    incomeRecord.otherIncome;
+
+  function calculateIncomeTax(grossIncome: number): TaxCalculationResult {
+    const standardDeduction = 75000;
+    const netTaxableIncome = Math.max(0, grossIncome - standardDeduction);
+
+    const slabs = [
+      { limit: 400000, rate: 0.0 }, // Up to 4L
+      { limit: 800000, rate: 0.05 }, // 4L to 8L
+      { limit: 1200000, rate: 0.1 }, // 8L to 12L
+      { limit: 1600000, rate: 0.15 }, // 12L to 16L
+      { limit: 2000000, rate: 0.2 }, // 16L to 20L
+      { limit: 2400000, rate: 0.25 }, // 20L to 24L
+      { limit: Infinity, rate: 0.3 }, // Above 24L
+    ];
+
+    let grossTax = 0;
+    let previousLimit = 0;
+
+    for (const slab of slabs) {
+      if (netTaxableIncome > previousLimit) {
+        const taxableInThisSlab =
+          Math.min(netTaxableIncome, slab.limit) - previousLimit;
+        grossTax += taxableInThisSlab * slab.rate;
+        previousLimit = slab.limit;
+      } else {
+        break;
+      }
+    }
+
+    // 3. Section 87A Rebate
+    // (Available if net taxable income is up to ₹12,00,000, capped at ₹60,000 or actual tax)
+    let rebate87A = 0;
+    if (netTaxableIncome <= 1200000) {
+      rebate87A = Math.min(grossTax, 60000);
+    }
+
+    const taxAfterRebate = Math.max(0, grossTax - rebate87A);
+
+    const finalTaxPayable = Math.round(taxAfterRebate);
+
+    return {
+      grossIncome,
+      standardDeduction,
+      netTaxableIncome,
+      grossTax,
+      rebate87A,
+      taxAfterRebate,
+      finalTaxPayable,
+    };
+  }
+
+  const result = calculateIncomeTax(grossIncome);
+  console.log(result)
 });
 
 app.listen(3000, () => {
